@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>LabStock</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>LabStock</h1>
+        <p class="subtitle">Inventario de laboratorio</p>
+      </div>
+      <span id="prog-indicator" class="prog-dot hidden" title="Modo programador activo">🔓</span>
+    </header>
+
+    <main id="view"></main>
+
+    <nav class="bottom-nav">
+      <button data-nav="home"><span class="ico">🏠</span><span>Inicio</span></button>
+      <button data-nav="scan"><span class="ico">▣</span><span>Escanear</span></button>
+      <button data-nav="inventory"><span class="ico">📦</span><span>Inventario</span></button>
+      <button data-nav="shopping"><span class="ico">🛒</span><span>Compra</span></button>
+    </nav>
+  </div>
+
+  <!-- Librerías externas (versiones fijas) -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
