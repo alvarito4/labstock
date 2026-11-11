@@ -257,6 +257,12 @@ function renderScan() {
     <h2>Escanear producto</h2>
     <div class="scanner-box"><div id="reader"></div></div>
     <p class="hint">${esc(ui.scanMsg || "Apunta la cámara al código QR del producto.")}</p>
+    <button class="btn primary" data-action="retryCam">▣ Activar / reintentar cámara</button>
+    <label class="btn outline" style="display:block;text-align:center;cursor:pointer;box-sizing:border-box">
+      📷 Hacer foto del QR
+      <input type="file" accept="image/*" capture="environment" data-file="qr" hidden>
+    </label>
+    <div id="qr-file" hidden></div>
     <div class="row">
       <input id="manual-code" placeholder="O escribe el código, ej. LBK-AKKDET">
       <button class="btn primary small" data-action="manualSearch">Buscar</button>
@@ -423,8 +429,13 @@ function startScanner() {
     .start({ facingMode: "environment" }, { fps: 10, qrbox: 230 },
       (text) => { stopScanner(); handleCode(text); },
       () => {})
-    .catch(() => {
-      ui.scanMsg = "No se pudo acceder a la cámara. Usa el campo manual.";
+    .catch((err) => {
+      const motivo = err && err.name === "NotAllowedError"
+        ? "Permiso de cámara denegado. Permítela en la configuración del navegador."
+        : err && err.name === "NotFoundError"
+          ? "No se encontró ninguna cámara en este dispositivo."
+          : "No se pudo abrir la cámara (" + (err && err.name ? err.name : "error") + ").";
+      ui.scanMsg = motivo + " Puedes usar 📷 Hacer foto del QR.";
       updateScanMsg();
     });
 }
@@ -573,6 +584,7 @@ document.addEventListener("click", (e) => {
     }
     case "delete": return deleteProduct(id);
     case "manualSearch": return handleCode($("#manual-code").value);
+    case "retryCam": return navigate("scan");
   }
 });
 
@@ -613,6 +625,30 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+
+/* ---------- Leer QR desde una foto ---------- */
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.dataset.file !== "qr") return;
+  const file = t.files[0];
+  t.value = "";
+  if (!file) return;
+  if (!window.Html5Qrcode) {
+    ui.scanMsg = "No se pudo cargar el lector QR.";
+    return updateScanMsg();
+  }
+  ui.scanMsg = "Leyendo la foto…";
+  updateScanMsg();
+  try {
+    const reader = new Html5Qrcode("qr-file");
+    const text = await reader.scanFile(file, false);
+    handleCode(text);
+  } catch (err) {
+    ui.scanMsg = "No se encontró ningún QR en la foto. Acércate más y vuelve a intentarlo.";
+    updateScanMsg();
+  }
+});
 
 /* ---------- Arranque ---------- */
 async function init() {
