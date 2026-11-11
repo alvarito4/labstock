@@ -2,15 +2,17 @@
    LabStock - inventario compartido (Supabase)
    ========================================================= */
 
-// ====== CONFIGURACIÓN: cambia estos 3 valores ======
+// ====== CONFIGURACIÓN ======
 const SUPABASE_URL = "https://htpuapxxczbtpfmvjomn.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_1fljO7C6ruXWgk7FD2KhwA_0iiHC8Og";
 const PUBLIC_URL = "https://alvarito4.github.io/labstock/";
-// ===================================================
+// ===========================
 
 const PROGRAMMER_CODE = "955664";
 const CATEGORIES = ["Reactivos", "Material de vidrio", "Consumibles", "Equipos"];
+const LOCATIONS = ["Laboratorio 1", "Laboratorio 2"];
 const FILTERS = ["Todas", ...CATEGORIES];
+const FDS_BUCKET = "fds";
 const NAV_FOR_VIEW = {
   home: "home", form: "home", scan: "scan",
   inventory: "inventory", detail: "inventory", shopping: "shopping",
@@ -26,6 +28,7 @@ let ui = {
   programmer: false,
   search: "",
   filter: "Todas",
+  locFilter: "Todos",
   draft: null,
   error: "",
   scanner: null,
@@ -37,11 +40,13 @@ let ui = {
 /* ---------- Base de datos (Supabase) ---------- */
 const toRow = (p) => ({
   id: p.id, code: p.code, name: p.name, category: p.category,
-  stock: p.stock, min_stock: p.minStock, history: p.history || [],
+  location: p.location, stock: p.stock, min_stock: p.minStock,
+  fds_url: p.fdsUrl || null, history: p.history || [],
 });
 const fromRow = (r) => ({
   id: r.id, code: r.code, name: r.name, category: r.category,
-  stock: r.stock, minStock: r.min_stock, history: r.history || [],
+  location: r.location || LOCATIONS[0], stock: r.stock, minStock: r.min_stock,
+  fdsUrl: r.fds_url || null, history: r.history || [],
 });
 
 async function loadProducts() {
@@ -53,15 +58,28 @@ async function loadProducts() {
 async function persist(p) {
   const { error } = await sb.from("products").upsert(toRow(p));
   if (error) {
-    ui.error = "No se pudo guardar: " + error.message;
+    alert("No se pudo guardar: " + error.message);
     await loadProducts().catch(() => {});
     render();
+    return false;
   }
+  return true;
 }
 
 async function removeProduct(id) {
   const { error } = await sb.from("products").delete().eq("id", id);
   if (error) alert("No se pudo eliminar: " + error.message);
+  sb.storage.from(FDS_BUCKET).remove([`${id}.pdf`]).catch(() => {});
+}
+
+async function uploadFds(p, file) {
+  const path = `${p.id}.pdf`;
+  const { error } = await sb.storage.from(FDS_BUCKET).upload(path, file, {
+    upsert: true, contentType: "application/pdf",
+  });
+  if (error) throw error;
+  const { data } = sb.storage.from(FDS_BUCKET).getPublicUrl(path);
+  p.fdsUrl = `${data.publicUrl}?v=${Date.now()}`;
 }
 
 /* Refresca los datos para que todos vean lo mismo */
@@ -152,8 +170,15 @@ function navigate(view, params = {}) {
   if (view === "form") {
     const p = params.id ? findProduct(params.id) : null;
     ui.draft = p
-      ? { id: p.id, code: p.code, name: p.name, category: p.category, stock: p.stock, minStock: p.minStock }
-      : { id: null, name: "", category: CATEGORIES[0], stock: 0, minStock: 0 };
+      ? {
+          id: p.id, code: p.code, name: p.name, category: p.category,
+          location: p.location || LOCATIONS[0], stock: p.stock, minStock: p.minStock,
+          fdsUrl: p.fdsUrl || null, fdsFile: null,
+        }
+      : {
+          id: null, name: "", category: CATEGORIES[0], location: LOCATIONS[0],
+          stock: 0, minStock: 0, fdsUrl: null, fdsFile: null,
+        };
   }
 
   render();
@@ -243,6 +268,10 @@ function renderInventory() {
     <h2>Inventario</h2>
     <input id="search" type="search" placeholder="Buscar producto o código" value="${esc(ui.search)}">
     <div class="chips">
+      ${["Todos", ...LOCATIONS].map((l) => `
+        <button class="chip ${ui.locFilter === l ? "on" : ""}" data-action="locFilter" data-value="${esc(l)}">${esc(l)}</button>`).join("")}
+    </div>
+    <div class="chips">
       ${FILTERS.map((f) => `
         <button class="chip ${ui.filter === f ? "on" : ""}" data-action="filter" data-value="${esc(f)}">${esc(f)}</button>`).join("")}
     </div>
@@ -253,6 +282,7 @@ function inventoryList() {
   const q = ui.search.trim().toLowerCase();
   const items = state.products.filter((p) =>
     (ui.filter === "Todas" || p.category === ui.filter) &&
+    (ui.locFilter === "Todos" || p.location === ui.locFilter) &&
     (!q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)));
 
   if (!items.length) {
@@ -260,7 +290,10 @@ function inventoryList() {
   }
   return items.map((p) => `
     <button class="item" data-go="detail" data-id="${p.id}">
-      <div><strong>${esc(p.name)}</strong><small>${esc(p.code)} · ${esc(p.category)}</small></div>
+      <div>
+        <strong>${esc(p.name)}</strong>
+        <small>${esc(p.code)} · ${esc(p.location)} · ${esc(p.category)}</small>
+      </div>
       <div class="right">${statusBadge(p)}<b>${p.stock}</b></div>
     </button>`).join("");
 }
@@ -273,7 +306,7 @@ function renderShopping() {
       <div class="item static">
         <div>
           <strong>${esc(p.name)}${statusBadge(p)}</strong>
-          <small>Stock ${p.stock} · mínimo ${p.minStock}</small>
+          <small>${esc(p.location)} · Stock ${p.stock} · mínimo ${p.minStock}</small>
         </div>
         <button class="btn primary small" data-action="restock" data-id="${p.id}">Comprado</button>
       </div>`).join("") : `
@@ -288,7 +321,7 @@ function renderDetail() {
   return `
     <button class="back" data-nav="inventory">‹ Volver</button>
     <h2>${esc(p.name)}</h2>
-    <p class="hint">${esc(p.code)} · ${esc(p.category)}${statusBadge(p)}</p>
+    <p class="hint">${esc(p.code)} · ${esc(p.location)} · ${esc(p.category)}${statusBadge(p)}</p>
 
     <div class="big"><b>${p.stock}</b><span>unidades en stock</span></div>
 
@@ -296,6 +329,10 @@ function renderDetail() {
       <button class="btn green" data-action="inc" data-id="${p.id}">+ Sumar uno</button>
       <button class="btn red" data-action="dec" data-id="${p.id}">− Restar uno</button>
     </div>
+
+    ${p.fdsUrl
+      ? `<a class="btn outline" href="${esc(p.fdsUrl)}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box">📄 Ver ficha de seguridad (PDF)</a>`
+      : `<p class="hint">Sin ficha de seguridad</p>`}
 
     <div class="qr-card">
       <div id="qr"></div>
@@ -321,6 +358,10 @@ function renderDetail() {
 function renderForm() {
   const d = ui.draft;
   const editing = Boolean(d.id);
+  let fdsStatus = "Sin ficha de seguridad";
+  if (d.fdsFile) fdsStatus = "Nuevo archivo: " + d.fdsFile.name;
+  else if (d.fdsUrl) fdsStatus = "Ya tiene ficha. Sube otra para reemplazarla.";
+
   return `
     <button class="back" data-nav="home">‹ Volver</button>
     <h2>${editing ? "Editar producto" : "Nuevo producto"}</h2>
@@ -328,6 +369,12 @@ function renderForm() {
 
     <label>Nombre del producto *</label>
     <input data-draft="name" value="${esc(d.name)}" placeholder="Ej. Etanol 96%">
+
+    <label>Ubicación</label>
+    <div class="chips">
+      ${LOCATIONS.map((l) => `
+        <button class="chip ${d.location === l ? "on" : ""}" data-action="draftLoc" data-value="${esc(l)}">${esc(l)}</button>`).join("")}
+    </div>
 
     <label>Categoría</label>
     <div class="chips">
@@ -337,6 +384,10 @@ function renderForm() {
 
     ${stepper("stock", "Stock actual", d.stock)}
     ${stepper("minStock", "Stock mínimo", d.minStock)}
+
+    <label>Ficha de datos de seguridad (PDF)</label>
+    <input type="file" accept="application/pdf" data-file="fds">
+    <p class="hint">${esc(fdsStatus)}</p>
 
     ${ui.error ? `<p class="error">${esc(ui.error)}</p>` : ""}
     <button class="btn primary" data-action="save">${editing ? "✓ Guardar cambios" : "✓ Añadir producto"}</button>`;
@@ -429,7 +480,7 @@ function changeStock(id, delta, type) {
   render();
 }
 
-function saveDraft() {
+async function saveDraft() {
   const d = ui.draft;
   const name = d.name.trim();
   if (!name) {
@@ -437,27 +488,40 @@ function saveDraft() {
     return render();
   }
 
-  const existing = d.id ? findProduct(d.id) : null;
-  if (existing) {
-    const diff = d.stock - existing.stock;
-    existing.name = name;
-    existing.category = d.category;
-    existing.minStock = d.minStock;
+  let p = d.id ? findProduct(d.id) : null;
+  const isNew = !p;
+
+  if (isNew) {
+    p = {
+      id: newId(), code: newCode(), name, category: d.category,
+      location: d.location, stock: d.stock, minStock: d.minStock,
+      fdsUrl: d.fdsUrl || null, history: [],
+    };
+    if (p.stock) addHistory(p, p.stock, "Alta");
+    state.products.push(p);
+  } else {
+    const diff = d.stock - p.stock;
+    p.name = name;
+    p.category = d.category;
+    p.location = d.location;
+    p.minStock = d.minStock;
     if (diff) {
-      existing.stock = d.stock;
-      addHistory(existing, diff, "Ajuste");
+      p.stock = d.stock;
+      addHistory(p, diff, "Ajuste");
     }
-    persist(existing);
-    return navigate("detail", { id: existing.id });
   }
 
-  const p = {
-    id: newId(), code: newCode(), name,
-    category: d.category, stock: d.stock, minStock: d.minStock, history: [],
-  };
-  if (p.stock) addHistory(p, p.stock, "Alta");
-  state.products.push(p);
-  persist(p);
+  if (d.fdsFile) {
+    try {
+      await uploadFds(p, d.fdsFile);
+    } catch (e) {
+      if (isNew) state.products = state.products.filter((x) => x !== p);
+      ui.error = "No se pudo subir el PDF: " + e.message;
+      return render();
+    }
+  }
+
+  if (!(await persist(p))) return;
   navigate("detail", { id: p.id });
 }
 
@@ -493,7 +557,9 @@ document.addEventListener("click", (e) => {
     case "unlock": return unlock();
     case "lock": ui.programmer = false; return render();
     case "filter": ui.filter = el.dataset.value; return render();
+    case "locFilter": ui.locFilter = el.dataset.value; return render();
     case "draftCat": ui.draft.category = el.dataset.value; return render();
+    case "draftLoc": ui.draft.location = el.dataset.value; return render();
     case "step":
       ui.draft[el.dataset.field] = Math.max(0, ui.draft[el.dataset.field] + Number(el.dataset.value));
       return render();
@@ -521,6 +587,22 @@ document.addEventListener("input", (e) => {
   if (t.dataset.draft && ui.draft) {
     const f = t.dataset.draft;
     ui.draft[f] = f === "name" ? t.value : Math.max(0, parseInt(t.value, 10) || 0);
+  }
+});
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.dataset.file === "fds" && ui.draft) {
+    const file = t.files[0];
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      ui.draft.fdsFile = null;
+      ui.error = "El archivo debe ser un PDF.";
+    } else {
+      ui.draft.fdsFile = file;
+      ui.error = "";
+    }
+    render();
   }
 });
 
