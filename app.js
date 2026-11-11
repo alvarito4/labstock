@@ -9,19 +9,21 @@ const PUBLIC_URL = "https://alvarito4.github.io/labstock/";
 // ===========================
 
 const PROGRAMMER_CODE = "955664";
-const CATEGORIES = ["Reactivos", "Material de vidrio", "Consumibles", "Equipos"];
-const LOCATIONS = ["Laboratorio 1", "Laboratorio 2"];
-const FILTERS = ["Todas", ...CATEGORIES];
 const FDS_BUCKET = "fds";
 const NAV_FOR_VIEW = {
   home: "home", form: "home", scan: "scan",
   inventory: "inventory", detail: "inventory", shopping: "shopping",
+  sections: "home",
 };
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ---------- Estado ---------- */
-let state = { products: [] };
+let state = {
+  products: [],
+  locations: ["Laboratorio 1", "Laboratorio 2"],
+  categories: ["Reactivos", "Material de vidrio", "Consumibles", "Equipos"],
+};
 let ui = {
   view: "home",
   params: {},
@@ -45,7 +47,7 @@ const toRow = (p) => ({
 });
 const fromRow = (r) => ({
   id: r.id, code: r.code, name: r.name, category: r.category,
-  location: r.location || LOCATIONS[0], stock: r.stock, minStock: r.min_stock,
+  location: r.location || state.locations[0], stock: r.stock, minStock: r.min_stock,
   fdsUrl: r.fds_url || null, history: r.history || [],
 });
 
@@ -87,6 +89,7 @@ async function refresh() {
   if (ui.loading || ui.view === "form" || ui.view === "scan") return;
   if (document.activeElement && document.activeElement.tagName === "INPUT") return;
   try {
+    await loadLists();
     await loadProducts();
     render();
   } catch (e) { /* sin conexión: seguimos con los datos actuales */ }
@@ -150,6 +153,7 @@ function formatDate(iso) {
 const views = {
   home: renderHome, scan: renderScan, inventory: renderInventory,
   shopping: renderShopping, detail: renderDetail, form: renderForm,
+  sections: renderSections,
 };
 
 function render() {
@@ -172,11 +176,11 @@ function navigate(view, params = {}) {
     ui.draft = p
       ? {
           id: p.id, code: p.code, name: p.name, category: p.category,
-          location: p.location || LOCATIONS[0], stock: p.stock, minStock: p.minStock,
+          location: p.location || state.locations[0], stock: p.stock, minStock: p.minStock,
           fdsUrl: p.fdsUrl || null, fdsFile: null,
         }
       : {
-          id: null, name: "", category: CATEGORIES[0], location: LOCATIONS[0],
+          id: null, name: "", category: state.categories[0], location: state.locations[0],
           stock: 0, minStock: 0, fdsUrl: null, fdsFile: null,
         };
   }
@@ -238,6 +242,7 @@ function renderProgrammer() {
       <div class="card prog">
         <strong>✔ Modo programador activo</strong>
         <p>Puedes editar y eliminar productos desde su ficha.</p>
+        <button class="btn outline" data-nav="sections" style="margin-top:8px">⚙ Gestionar secciones y categorías</button>
         <button class="link" data-action="lock">Cerrar sesión de programador</button>
       </div>`;
   }
@@ -274,11 +279,11 @@ function renderInventory() {
     <h2>Inventario</h2>
     <input id="search" type="search" placeholder="Buscar producto o código" value="${esc(ui.search)}">
     <div class="chips">
-      ${["Todos", ...LOCATIONS].map((l) => `
+      ${["Todos", ...state.locations].map((l) => `
         <button class="chip ${ui.locFilter === l ? "on" : ""}" data-action="locFilter" data-value="${esc(l)}">${esc(l)}</button>`).join("")}
     </div>
     <div class="chips">
-      ${FILTERS.map((f) => `
+      ${["Todas", ...state.categories].map((f) => `
         <button class="chip ${ui.filter === f ? "on" : ""}" data-action="filter" data-value="${esc(f)}">${esc(f)}</button>`).join("")}
     </div>
     <div id="inv-list">${inventoryList()}</div>`;
@@ -378,13 +383,13 @@ function renderForm() {
 
     <label>Ubicación</label>
     <div class="chips">
-      ${LOCATIONS.map((l) => `
+      ${state.locations.map((l) => `
         <button class="chip ${d.location === l ? "on" : ""}" data-action="draftLoc" data-value="${esc(l)}">${esc(l)}</button>`).join("")}
     </div>
 
     <label>Categoría</label>
     <div class="chips">
-      ${CATEGORIES.map((c) => `
+      ${state.categories.map((c) => `
         <button class="chip ${d.category === c ? "on" : ""}" data-action="draftCat" data-value="${esc(c)}">${esc(c)}</button>`).join("")}
     </div>
 
@@ -476,6 +481,96 @@ function openFromUrl() {
   navigate("home");
   ui.error = `No existe ningún producto con el código ${code}.`;
   render();
+}
+
+/* ---------- Secciones y categorías (configurables por el programador) ---------- */
+const LISTS = {
+  locations: { title: "Secciones", field: "location", singular: "sección", placeholder: "Ej. Material poco útil" },
+  categories: { title: "Categorías", field: "category", singular: "categoría", placeholder: "Ej. Productos de limpieza" },
+};
+
+async function loadLists() {
+  for (const key of Object.keys(LISTS)) {
+    const { data, error } = await sb.from("settings").select("value").eq("key", key).maybeSingle();
+    if (!error && data && Array.isArray(data.value) && data.value.length) state[key] = data.value;
+  }
+}
+
+async function saveList(key) {
+  const { error } = await sb.from("settings").upsert({ key, value: state[key] });
+  if (error) {
+    alert(`No se pudieron guardar las ${LISTS[key].title.toLowerCase()}: ` + error.message);
+    return false;
+  }
+  return true;
+}
+
+async function renameItem(key, i, newName) {
+  newName = newName.trim();
+  const oldName = state[key][i];
+  if (!newName || newName === oldName) return render();
+  if (state[key].includes(newName)) return alert(`Ya existe esa ${LISTS[key].singular}.`);
+
+  const field = LISTS[key].field;
+  state[key][i] = newName;
+  const affected = state.products.filter((p) => p[field] === oldName);
+  affected.forEach((p) => { p[field] = newName; });
+  if (key === "categories" && ui.filter === oldName) ui.filter = newName;
+  if (key === "locations" && ui.locFilter === oldName) ui.locFilter = newName;
+
+  if (!(await saveList(key))) return;
+  await Promise.all(affected.map((p) => persist(p)));
+  render();
+}
+
+async function addItem(key, name) {
+  name = name.trim();
+  if (!name) return;
+  if (state[key].includes(name)) return alert(`Ya existe esa ${LISTS[key].singular}.`);
+  state[key].push(name);
+  await saveList(key);
+  render();
+}
+
+async function deleteItem(key, i) {
+  const name = state[key][i];
+  const field = LISTS[key].field;
+  const used = state.products.filter((p) => p[field] === name).length;
+  if (used) return alert(`No se puede borrar "${name}": tiene ${used} producto(s). Cámbialos antes.`);
+  if (state[key].length <= 1) return alert(`Debe quedar al menos una ${LISTS[key].singular}.`);
+  if (!confirm(`¿Borrar "${name}"?`)) return;
+  state[key].splice(i, 1);
+  await saveList(key);
+  render();
+}
+
+function renderListEditor(key) {
+  const cfg = LISTS[key];
+  return `
+    <h3>${cfg.title}</h3>
+    ${state[key].map((name, i) => `
+      <div class="item static" style="gap:8px">
+        <input data-item-input="${key}-${i}" value="${esc(name)}" style="flex:1;min-width:0;margin-bottom:0">
+        <button class="btn primary small" data-action="renameItem" data-list="${key}" data-index="${i}">Guardar</button>
+        <button class="btn outline danger small" data-action="delItem" data-list="${key}" data-index="${i}">Borrar</button>
+      </div>`).join("")}
+    <div class="row" style="margin-bottom:12px">
+      <input id="new-${key}" placeholder="${cfg.placeholder}" style="margin-bottom:0">
+      <button class="btn primary small" data-action="addItem" data-list="${key}">Añadir</button>
+    </div>`;
+}
+
+function renderSections() {
+  if (!ui.programmer) {
+    ui.view = "home";
+    return renderHome();
+  }
+  return `
+    <button class="back" data-nav="home">‹ Volver</button>
+    <h2>Secciones y categorías</h2>
+    <p class="hint">Cambia nombres o añade nuevas. Los productos se actualizan solos.</p>
+    ${renderListEditor("locations")}
+    ${renderListEditor("categories")}`;
 }
 
 /* ---------- Acciones ---------- */
@@ -585,6 +680,13 @@ document.addEventListener("click", (e) => {
     case "delete": return deleteProduct(id);
     case "manualSearch": return handleCode($("#manual-code").value);
     case "retryCam": return navigate("scan");
+    case "addItem": return addItem(el.dataset.list, $(`#new-${el.dataset.list}`).value);
+    case "renameItem": {
+      const i = Number(el.dataset.index);
+      const input = document.querySelector(`[data-item-input="${el.dataset.list}-${i}"]`);
+      return renameItem(el.dataset.list, i, input.value);
+    }
+    case "delItem": return deleteItem(el.dataset.list, Number(el.dataset.index));
   }
 });
 
@@ -626,7 +728,6 @@ document.addEventListener("keydown", (e) => {
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
-
 /* ---------- Leer QR desde una foto ---------- */
 document.addEventListener("change", async (e) => {
   const t = e.target;
@@ -653,6 +754,7 @@ document.addEventListener("change", async (e) => {
 /* ---------- Arranque ---------- */
 async function init() {
   try {
+    await loadLists();
     await loadProducts();
   } catch (e) {
     ui.loadError = "No se pudo conectar con la base de datos. Revisa SUPABASE_URL y SUPABASE_ANON_KEY en app.js.";
