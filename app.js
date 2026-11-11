@@ -31,6 +31,7 @@ let ui = {
   search: "",
   filter: "Todas",
   locFilter: "Todos",
+  onlyOut: false,
   draft: null,
   error: "",
   scanner: null,
@@ -207,7 +208,7 @@ function renderHome() {
     <section class="stats">
       <div class="stat"><b>${total}</b><span>Productos</span></div>
       <div class="stat"><b>${units}</b><span>Unidades</span></div>
-      <div class="stat"><b>${out}</b><span>Agotados</span></div>
+      <button class="stat" style="border:0;font-family:inherit;cursor:pointer" data-action="showOut"><b>${out}</b><span>Agotados</span></button>
     </section>
 
     <button class="btn primary" data-go="form">⊕ Añadir producto</button>
@@ -277,6 +278,7 @@ function renderScan() {
 function renderInventory() {
   return `
     <h2>Inventario</h2>
+    ${ui.onlyOut ? `<div class="alert" data-action="clearOut">Mostrando solo agotados (${state.products.filter((p) => p.stock === 0).length}) · Ver todos</div>` : ""}
     <input id="search" type="search" placeholder="Buscar producto o código" value="${esc(ui.search)}">
     <div class="chips">
       ${["Todos", ...state.locations].map((l) => `
@@ -294,6 +296,7 @@ function inventoryList() {
   const items = state.products.filter((p) =>
     (ui.filter === "Todas" || p.category === ui.filter) &&
     (ui.locFilter === "Todos" || p.location === ui.locFilter) &&
+    (!ui.onlyOut || p.stock === 0) &&
     (!q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)));
 
   if (!items.length) {
@@ -655,7 +658,10 @@ document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-nav],[data-go],[data-action]");
   if (!el) return;
 
-  if (el.dataset.nav) return navigate(el.dataset.nav);
+  if (el.dataset.nav) {
+    if (el.closest(".bottom-nav") && el.dataset.nav === "inventory") ui.onlyOut = false;
+    return navigate(el.dataset.nav);
+  }
   if (el.dataset.go) return navigate(el.dataset.go, { id: el.dataset.id });
 
   const id = el.dataset.id;
@@ -680,6 +686,10 @@ document.addEventListener("click", (e) => {
     case "delete": return deleteProduct(id);
     case "manualSearch": return handleCode($("#manual-code").value);
     case "retryCam": return navigate("scan");
+    case "showOut":
+      ui.onlyOut = true; ui.filter = "Todas"; ui.locFilter = "Todos"; ui.search = "";
+      return navigate("inventory");
+    case "clearOut": ui.onlyOut = false; return render();
     case "addItem": return addItem(el.dataset.list, $(`#new-${el.dataset.list}`).value);
     case "renameItem": {
       const i = Number(el.dataset.index);
